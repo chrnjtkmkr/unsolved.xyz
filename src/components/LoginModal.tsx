@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
-import { dbService } from "@/lib/firebase";
+import { supabaseDbService } from "@/lib/supabase";
 import { Mail, Phone, LogIn, ArrowRight, ShieldCheck, X, Check, AlertCircle } from "lucide-react";
 
 export default function LoginModal() {
@@ -15,6 +15,7 @@ export default function LoginModal() {
     loginWithEmail, 
     signupWithEmail, 
     loginWithPhone,
+    verifyPhone,
     claimUsername 
   } = useAuth();
 
@@ -64,7 +65,7 @@ export default function LoginModal() {
     setUsernameStatus("checking");
     const delayDebounce = setTimeout(async () => {
       try {
-        const isUnique = await dbService.isUsernameUnique(clean, user?.uid);
+        const isUnique = await supabaseDbService.isUsernameUnique(clean, user?.uid);
         setUsernameStatus(isUnique ? "available" : "taken");
       } catch (err) {
         setUsernameStatus("idle");
@@ -122,33 +123,36 @@ export default function LoginModal() {
     }
   };
 
-  const handlePhoneSend = (e: React.FormEvent) => {
+  const handlePhoneSend = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!phone || phone.length < 10) {
+    if (!phone || phone.length < 8) {
       setError("Please enter a valid phone number.");
-      return;
-    }
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setOtpSent(true);
-      setError("");
-    }, 1000);
-  };
-
-  const handlePhoneVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (otp !== "123456" && otp.length !== 6) {
-      setError("Incorrect code. Try '123456' for the demo.");
       return;
     }
     setLoading(true);
     try {
       await loginWithPhone(phone);
+      setOtpSent(true);
     } catch (err: any) {
-      setError(err.message || "Phone verification failed.");
+      setError(err.message || "Failed to send verification SMS.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePhoneVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!otp || otp.length < 6) {
+      setError("Please enter a valid 6-digit code.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await verifyPhone(phone, otp);
+    } catch (err: any) {
+      setError(err.message || "Incorrect code. Try '123456' if in mock mode.");
     } finally {
       setLoading(false);
     }

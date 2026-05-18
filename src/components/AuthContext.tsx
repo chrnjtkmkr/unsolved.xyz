@@ -1,7 +1,8 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { authService, dbService, UserProfile } from "@/lib/firebase";
+import { UserProfile } from "@/lib/firebase";
+import { supabaseAuthService, supabaseDbService } from "@/lib/supabase";
 import { useRouter, usePathname } from "next/navigation";
 
 interface AuthContextType {
@@ -12,6 +13,7 @@ interface AuthContextType {
   loginWithEmail: (email: string, pass: string) => Promise<any>;
   signupWithEmail: (email: string, pass: string) => Promise<any>;
   loginWithPhone: (phone: string) => Promise<any>;
+  verifyPhone: (phone: string, code: string) => Promise<any>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   showLoginModal: boolean;
@@ -33,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchProfile = async (uid: string) => {
     try {
-      const uProfile = await dbService.getUserProfile(uid);
+      const uProfile = await supabaseDbService.getUserProfile(uid);
       setProfile(uProfile);
       return uProfile;
     } catch (e) {
@@ -49,15 +51,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const unsubscribe = authService.onAuthStateChanged(async (authUser) => {
-      setUser(authUser);
+    const unsubscribe = supabaseAuthService.onAuthStateChanged(async (authUser) => {
       if (authUser) {
-        const uProfile = await fetchProfile(authUser.uid);
+        // Map user.id to user.uid to preserve backwards-compatibility with the existing codebase
+        authUser.uid = authUser.id;
+        
+        // Map user_metadata keys for display purposes
+        if (authUser.user_metadata) {
+          authUser.displayName = authUser.user_metadata.full_name || authUser.email?.split("@")[0] || "Builder";
+          authUser.photoURL = authUser.user_metadata.avatar_url || "";
+        }
+        
+        setUser(authUser);
+        const uProfile = await fetchProfile(authUser.id);
         // If logged in but has no username set, prompt them
         if (uProfile && !uProfile.username) {
           setShowLoginModal(true);
         }
       } else {
+        setUser(null);
         setProfile(null);
       }
       setLoading(false);
@@ -80,10 +92,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithGoogle = async () => {
     setLoading(true);
     try {
-      const u = await authService.signInWithGoogle();
-      await fetchProfile(u.uid);
-      setShowLoginModal(false);
-      return u;
+      const result = await supabaseAuthService.signInWithGoogle();
+      // If returning user directly (e.g. mock mode)
+      if (result && (result as any).user) {
+        const u = (result as any).user;
+        u.uid = u.id;
+        setUser(u);
+        await fetchProfile(u.id);
+        setShowLoginModal(false);
+        return u;
+      }
+      return result;
     } catch (e) {
       console.error(e);
       throw e;
@@ -95,8 +114,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithEmail = async (email: string, pass: string) => {
     setLoading(true);
     try {
-      const u = await authService.signInWithEmail(email, pass);
-      await fetchProfile(u.uid);
+      const u = await supabaseAuthService.signInWithEmail(email, pass);
+      u.uid = u.id;
+      setUser(u);
+      await fetchProfile(u.id);
       setShowLoginModal(false);
       return u;
     } catch (e) {
@@ -110,8 +131,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signupWithEmail = async (email: string, pass: string) => {
     setLoading(true);
     try {
-      const u = await authService.signUpWithEmail(email, pass);
-      await fetchProfile(u.uid);
+      const u = await supabaseAuthService.signUpWithEmail(email, pass);
+      u.uid = u.id;
+      setUser(u);
+      await fetchProfile(u.id);
       return u;
     } catch (e) {
       console.error(e);
@@ -124,8 +147,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loginWithPhone = async (phone: string) => {
     setLoading(true);
     try {
-      const u = await authService.signInWithPhoneOTP(phone);
-      await fetchProfile(u.uid);
+      const result = await supabaseAuthService.signInWithPhoneOTP(phone);
+      return result;
+    } catch (e) {
+      console.error(e);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyPhone = async (phone: string, code: string) => {
+    setLoading(true);
+    try {
+      const u = await supabaseAuthService.verifyPhoneOTP(phone, code);
+      u.uid = u.id;
+      setUser(u);
+      await fetchProfile(u.id);
       setShowLoginModal(false);
       return u;
     } catch (e) {
@@ -138,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     setLoading(true);
-    await authService.signOut();
+    await supabaseAuthService.signOut();
     setUser(null);
     setProfile(null);
     setLoading(false);
@@ -147,10 +185,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const claimUsername = async (username: string): Promise<boolean> => {
     if (!user) return false;
-    const isUnique = await dbService.isUsernameUnique(username, user.uid);
+    const isUnique = await supabaseDbService.isUsernameUnique(username, user.uid);
     if (!isUnique) return false;
 
-    const updated = await dbService.saveUserProfile(user.uid, {
+    const updated = await supabaseDbService.saveUserProfile(user.uid, {
       username: username.toLowerCase().trim(),
       displayName: profile?.displayName || user.displayName || username,
       photoURL: profile?.photoURL || user.photoURL || ""
@@ -169,6 +207,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginWithEmail,
         signupWithEmail,
         loginWithPhone,
+        verifyPhone,
         logout,
         refreshProfile,
         showLoginModal,
@@ -188,3 +227,4 @@ export function useAuth() {
   }
   return context;
 }
+
